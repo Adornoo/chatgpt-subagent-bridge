@@ -54,3 +54,31 @@ test("validateCapturedResult passes a normal advice-only response", () => {
   assert.equal(verdict.status, "pass");
   assert.equal(verdict.reasons.length, 0);
 });
+
+test("validateCapturedResult passes a representative deep research brief response", () => {
+  const packet = prepareTaskPacket({
+    title: "Deep research brief for market map",
+    task: "Create a research brief for a market map and route the follow-up work across separate model passes.",
+    attachments: [],
+    workMode: "deep-research-brief"
+  });
+  const longSection = "Evidence criterion: cite the source, date, claim, confidence, and follow-up gap. ".repeat(95);
+  const responseText = [
+    "Objective: produce a source-bound market map brief.",
+    "Thread plan: the developer should open a steering thread, then create separate evidence, synthesis, and review threads.",
+    "Model route: use 5.4 High for primary synthesis, 5.4 Mini High for narrow evidence extraction, and 5.5 High for final challenge review.",
+    "Research plan: gather current sources, compare claims, flag uncertainty, and write only future-tense implementation steps.",
+    longSection
+  ].join("\n\n");
+
+  assert.ok(responseText.length > 8000);
+  assert.equal(packet.deliveryPolicy.maxResponseChars, 20000);
+
+  const verdict = validateCapturedResult({
+    packet,
+    responseText
+  });
+
+  assert.equal(verdict.status, "pass");
+  assert.equal(verdict.reasons.length, 0);
+});

@@ -95,6 +95,32 @@ test("capture exits non-zero when the stored verdict fails", async () => {
   }
 });
 
+test("prepare rejects unknown work modes instead of silently falling back", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "chatgpt-bridge-cli-"));
+
+  try {
+    const result = await runNode(
+      [
+        wrapperPath,
+        "prepare",
+        "--title",
+        "Unknown mode",
+        "--task",
+        "Summarize this note.",
+        "--mode",
+        "garbage-mode"
+      ],
+      workspaceRoot
+    );
+
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout.trim(), "");
+    assert.match(result.stderr, /Unknown mode: garbage-mode/i);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 async function writePacketFixture(workspaceRoot: string): Promise<string> {
   const packet = prepareTaskPacket({
     title: "CLI validation test",

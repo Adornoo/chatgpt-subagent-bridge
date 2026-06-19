@@ -11,6 +11,7 @@ import {
   routeTaskThroughBridge,
   validateCapturedResult
 } from "./lib/bridge.ts";
+import type { WorkMode } from "./lib/bridge.ts";
 import { assertAllowedChatGptUrl, createChromeAppleScriptAdapter } from "./lib/chrome.ts";
 
 type ParsedArgs = {
@@ -119,12 +120,13 @@ async function runValidate(parsed: ParsedArgs): Promise<number> {
 async function buildPacketFromArgs(parsed: ParsedArgs) {
   const task = await resolveTaskText(parsed);
   const attachments = await resolveAttachments(parsed);
+  const workMode = parseWorkMode(singleValue(parsed, "mode"));
   return prepareTaskPacket({
     title: requiredValue(parsed, "title"),
     task,
     attachments,
-    workMode: (singleValue(parsed, "mode") as "advice-only" | "github-only-code" | undefined) ?? "advice-only",
-    maxResponseChars: parseNumber(singleValue(parsed, "max-response-chars")) ?? 8000
+    workMode,
+    maxResponseChars: parseNumber(singleValue(parsed, "max-response-chars"))
   });
 }
 
@@ -225,6 +227,18 @@ function parseNumber(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseWorkMode(value: string | undefined): WorkMode {
+  if (!value) {
+    return "advice-only";
+  }
+
+  if (value === "advice-only" || value === "github-only-code" || value === "deep-research-brief") {
+    return value;
+  }
+
+  throw new Error(`Unknown mode: ${value}. Expected advice-only, github-only-code, or deep-research-brief.`);
+}
+
 function exitCodeForVerdict(status: "pass" | "fail", parsed: ParsedArgs): number {
   if (status === "pass" || hasFlag(parsed, "allow-failed-verdict")) {
     return 0;
@@ -247,8 +261,8 @@ MIT-licensed packet-only bridge for attended drafting, summarizing, planning, an
 Do not use this for secrets, regulated data, or anything you would not be willing to send to ChatGPT itself.
 
 Commands:
-  prepare --title TITLE --task TEXT [--mode advice-only|github-only-code]
-  route --title TITLE --task TEXT [--workspace-root DIR] [--confirm-sensitive] [--allow-failed-verdict]
+  prepare --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief]
+  route --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief] [--workspace-root DIR] [--confirm-sensitive] [--allow-failed-verdict]
   capture --packet FILE --response TEXT|--response-file FILE [--run-directory DIR] [--allow-failed-verdict]
   validate --packet FILE --response TEXT|--response-file FILE [--allow-failed-verdict]
 
@@ -259,6 +273,7 @@ Notes:
 
 Examples:
   chatgpt-bridge prepare --title "Summarize notes" --task "Summarize these notes in three bullets."
+  chatgpt-bridge prepare --title "Market map brief" --mode deep-research-brief --task "Plan a source-bound research brief."
   chatgpt-bridge route --title "Summarize notes" --task "Summarize these notes in three bullets." --workspace-root .
   chatgpt-bridge capture --packet ./bridge_runs/.../task-packet.json --response-file ./reply.txt --run-directory ./bridge_runs/.../
   chatgpt-bridge validate --packet ./bridge_runs/.../task-packet.json --response-file ./reply.txt

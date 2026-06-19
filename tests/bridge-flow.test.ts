@@ -163,3 +163,20 @@ test("routeTaskThroughBridge uses unique run directories for packets with the sa
     await rm(workspaceRoot, { recursive: true, force: true });
   }
 });
+
+test("deep research brief mode keeps packet-only guardrails and asks for a threaded plan", () => {
+  const packet = prepareTaskPacket({
+    title: "Deep research launch plan",
+    task: "Plan a deep research brief for a product category.",
+    attachments: [],
+    workMode: "deep-research-brief"
+  });
+
+  assert.match(packet.prompt.body, /You do not have direct local filesystem, shell, terminal, or tunnel access/i);
+  assert.match(packet.prompt.body, /Do not claim that you opened local files, ran commands, edited the workspace, or executed tests/i);
+  assert.match(packet.prompt.body, /Deep research brief mode/i);
+  assert.match(packet.prompt.body, /separate research, synthesis, implementation, and review threads/i);
+  assert.match(packet.prompt.body, /5\.4 High/i);
+  assert.match(packet.prompt.body, /5\.4 Mini High/i);
+  assert.match(packet.prompt.body, /5\.5 High/i);
+});

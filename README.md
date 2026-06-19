@@ -23,6 +23,7 @@ Use it for:
 - harmless drafting or rewriting tasks,
 - naming and brainstorming packets,
 - summary or planning requests,
+- source-bound deep research brief planning,
 - review comments that do not require local execution.
 
 Do not use it for:
@@ -72,6 +73,8 @@ node /path/to/chatgpt-subagent-bridge/bin/chatgpt-bridge.mjs route \
 - `chatgpt-bridge capture`: store a manually captured response against an existing packet and validate it.
 - `chatgpt-bridge validate`: validate a response against an existing packet without routing it through Chrome.
 
+`prepare` and `route` support `--mode advice-only`, `--mode github-only-code`, and `--mode deep-research-brief`. The deep research brief mode asks ChatGPT for a structured future-tense research plan with source strategy, evidence criteria, separate research/synthesis/implementation/review thread routing, and suggested 5.4 High, 5.4 Mini High, and 5.5 High model roles. It does not create threads, invoke models, inspect repositories, or perform research by itself.
+
 By default, `route`, `capture`, and `validate` exit non-zero when validation fails. Use `--allow-failed-verdict` only when you deliberately want to inspect or preserve a failing output.
 
 Release note: this repository is public and MIT-licensed for source use, modification, and forking. npm publication remains a separate decision and is still disabled with `private: true`. See [docs/release-posture-and-launch.md](./docs/release-posture-and-launch.md) for the current launch posture.
@@ -93,6 +96,15 @@ chatgpt-bridge prepare \
   --title "Summarize release notes" \
   --task "Please summarize these release notes in three bullets." \
   --attachment notes=./sample-release-notes.txt
+```
+
+Example deep research brief packet:
+
+```bash
+chatgpt-bridge prepare \
+  --title "Market map research brief" \
+  --mode deep-research-brief \
+  --task "Plan a source-bound research brief for this market map."
 ```
 
 All examples in this repository use fake paths and sample data only.

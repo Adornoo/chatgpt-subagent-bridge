@@ -16,7 +16,7 @@ export interface PrepareTaskPacketInput {
   title: string;
   task: string;
   attachments: TaskAttachment[];
-  workMode?: "advice-only" | "github-only-code";
+  workMode?: WorkMode;
   maxResponseChars?: number;
 }
 
@@ -66,6 +66,8 @@ export type PreparedTaskPacket = TaskPacket & {
 export type StoredResultPacket = ResultPacket & {
   capture: CaptureMeta;
 };
+
+export type WorkMode = "advice-only" | "github-only-code" | "deep-research-brief";
 
 const SECRET_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{6,}\b/g,
@@ -121,6 +123,7 @@ const LEAK_PATTERNS = [
 export function prepareTaskPacket(input: PrepareTaskPacketInput): PreparedTaskPacket {
   const packetId = randomUUID();
   const createdAt = new Date().toISOString();
+  const workMode = input.workMode ?? "advice-only";
   const combinedItems = [input.task, ...input.attachments.map((attachment) => attachment.content)];
   const combinedText = combinedItems.join("\n\n");
 
@@ -136,13 +139,13 @@ export function prepareTaskPacket(input: PrepareTaskPacketInput): PreparedTaskPa
     redactionItems,
     attachmentCount: redactedAttachments.length
   });
-  const deliveryPolicy = buildDeliveryPolicy(risk, input.maxResponseChars ?? 8000);
+  const deliveryPolicy = buildDeliveryPolicy(risk, input.maxResponseChars ?? defaultMaxResponseChars(workMode));
 
   const promptBody = buildPromptBody({
     title: input.title,
     task: redactedTask,
     attachments: redactedAttachments,
-    workMode: input.workMode ?? "advice-only",
+    workMode,
     maxResponseChars: deliveryPolicy.maxResponseChars ?? 8000
   });
 
@@ -351,13 +354,10 @@ function buildPromptBody(input: {
   title: string;
   task: string;
   attachments: TaskAttachment[];
-  workMode: "advice-only" | "github-only-code";
+  workMode: WorkMode;
   maxResponseChars: number;
 }): string {
-  const modeLine =
-    input.workMode === "github-only-code"
-      ? "Code work mode: GitHub-only suggestions or review comments are allowed, but do not claim local edits, tests, commits, or PR actions."
-      : "Advice mode: provide text-only guidance, drafting, naming, planning, or review feedback.";
+  const modeLine = modeInstructions(input.workMode);
   const attachmentBlock =
     input.attachments.length === 0
       ? "Attachments: none"
@@ -382,6 +382,34 @@ function buildPromptBody(input: {
     "",
     attachmentBlock
   ].join("\n");
+}
+
+function modeInstructions(workMode: WorkMode): string {
+  switch (workMode) {
+    case "advice-only":
+      return "Advice mode: provide text-only guidance, drafting, naming, planning, or review feedback.";
+    case "github-only-code":
+      return "Code work mode: GitHub-only suggestions or review comments are allowed, but do not claim local edits, tests, commits, or PR actions.";
+    case "deep-research-brief":
+      return [
+        "Deep research brief mode: return a structured research brief plan, not completed research.",
+        "Frame the brief in future-tense or imperative wording for an operator to execute later.",
+        "Include objective, scope, source strategy, evidence criteria, open questions, risks, and expected deliverables.",
+        "Plan separate research, synthesis, implementation, and review threads.",
+        "Route model work explicitly: use 5.4 High for primary synthesis, 5.4 Mini High for narrow extraction or checklist work, and 5.5 High for final challenge review.",
+        "Do not imply that ChatGPT can create threads, inspect repositories, run tools, or dispatch those model routes directly."
+      ].join(" ");
+  }
+}
+
+function defaultMaxResponseChars(workMode: WorkMode): number {
+  switch (workMode) {
+    case "deep-research-brief":
+      return 20000;
+    case "advice-only":
+    case "github-only-code":
+      return 8000;
+  }
 }
 
 function assessRisk(input: {

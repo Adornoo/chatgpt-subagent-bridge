@@ -35,6 +35,7 @@ test("help text explains route workspace-root behavior and shows it in examples"
     assert.equal(result.stderr.trim(), "");
     assert.match(result.stdout, /bridge_runs\/ under the selected workspace root/i);
     assert.match(result.stdout, /defaults to the current working directory/i);
+    assert.match(result.stdout, /deep-research-brief/i);
     assert.match(result.stdout, /chatgpt-bridge route .*--workspace-root/i);
     assert.match(result.stdout, /chatgpt-bridge capture .*--run-directory/i);
   } finally {

@@ -1,0 +1,28 @@
+{
+  "name": "chatgpt-subagent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Packet-only Chrome bridge for sending selected prompts through ChatGPT without local tool access.",
+  "license": "MIT",
+  "bin": {
+    "chatgpt-bridge": "./bin/chatgpt-bridge.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "THREAT_MODEL.md",
+    "docs/chrome-apple-events-setting.md"
+  ],
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "bridge": "node ./bin/chatgpt-bridge.mjs",
+    "pack:check": "npm pack --dry-run",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  }
+}

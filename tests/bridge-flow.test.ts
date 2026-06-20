@@ -1,10 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { prepareTaskPacket, routeTaskThroughBridge } from "../src/lib/bridge.ts";
+import {
+  completeDeepResearchThroughBridge,
+  prepareTaskPacket,
+  routeTaskThroughBridge,
+  startDeepResearchThroughBridge
+} from "../src/lib/bridge.ts";
+import { findLatestMarkdownDownload } from "../src/lib/chrome.ts";
 
 test("routeTaskThroughBridge stores a redacted packet, captured result, and pass verdict", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "chatgpt-bridge-"));
@@ -179,4 +185,139 @@ test("deep research brief mode keeps packet-only guardrails and asks for a threa
   assert.match(packet.prompt.body, /5\.4 High/i);
   assert.match(packet.prompt.body, /5\.4 Mini High/i);
   assert.match(packet.prompt.body, /5\.5 High/i);
+});
+
+test("startDeepResearchThroughBridge stores the proposed research approach without confirming it", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "chatgpt-bridge-"));
+
+  try {
+    const packet = prepareTaskPacket({
+      title: "Usage optimization research",
+      task: "Research how to maximize consumer AI subscription value without using API billing.",
+      attachments: []
+    });
+
+    const run = await startDeepResearchThroughBridge({
+      workspaceRoot,
+      packet,
+      adapter: {
+        async submitResearchPlan(request) {
+          assert.match(request.prompt, /Remote collaboration packet/i);
+          assert.equal(request.runDirectory.includes("usage-optimization-research"), true);
+
+          return {
+            approachText: "I will compare official usage policies, reset windows, and practical routing patterns.",
+            captureMeta: {
+              channel: "fake"
+            }
+          };
+        },
+        async requestResearchReport() {
+          throw new Error("should not confirm report during start");
+        }
+      }
+    });
+
+    assert.equal(run.approachText, "I will compare official usage policies, reset windows, and practical routing patterns.");
+    assert.equal(await readFile(run.approachPath, "utf8"), `${run.approachText}\n`);
+    await stat(join(run.runDirectory, "task-packet.json"));
+    await stat(join(run.runDirectory, "task-packet.md"));
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("completeDeepResearchThroughBridge can send feedback, then stores the final report and verdict", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "chatgpt-bridge-"));
+
+  try {
+    const packet = prepareTaskPacket({
+      title: "Usage optimization research",
+      task: "Research how to maximize consumer AI subscription value without using API billing.",
+      attachments: []
+    });
+
+    const started = await startDeepResearchThroughBridge({
+      workspaceRoot,
+      packet,
+      adapter: {
+        async submitResearchPlan() {
+          return {
+            approachText: "I will compare marketing pages only.",
+            captureMeta: {
+              channel: "fake"
+            }
+          };
+        },
+        async requestResearchReport() {
+          throw new Error("should not confirm report during start");
+        }
+      }
+    });
+
+    const completed = await completeDeepResearchThroughBridge({
+      runDirectory: started.runDirectory,
+      packet,
+      approachFeedback: "Also use official help-center docs and distinguish Plus from Pro.",
+      adapter: {
+        async submitResearchPlan() {
+          throw new Error("should not submit a new plan during completion");
+        },
+        async reviseResearchApproach(request) {
+          assert.equal(request.feedback, "Also use official help-center docs and distinguish Plus from Pro.");
+          return {
+            approachText: "Revised: I will prioritize official help-center docs and separate Plus from Pro.",
+            captureMeta: {
+              channel: "fake"
+            }
+          };
+        },
+        async requestResearchReport(request) {
+          assert.match(request.approachText, /official help-center/i);
+          return {
+            responseText: "# Report\n\nUse Plus for breadth and Claude Pro for coding sprints.",
+            captureMeta: {
+              channel: "fake"
+            }
+          };
+        }
+      }
+    });
+
+    assert.equal(completed.verdict.status, "pass");
+    assert.equal(
+      await readFile(join(started.runDirectory, "research-approach-revised.md"), "utf8"),
+      "Revised: I will prioritize official help-center docs and separate Plus from Pro.\n"
+    );
+    assert.match(await readFile(join(started.runDirectory, "result-raw.md"), "utf8"), /# Report/);
+    assert.equal(completed.resultPacket.captureMeta.channel, "fake");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("findLatestMarkdownDownload returns the newest completed Markdown export after a cutoff", async () => {
+  const downloadRoot = await mkdtemp(join(tmpdir(), "chatgpt-bridge-downloads-"));
+
+  try {
+    const oldPath = join(downloadRoot, "old-report.md");
+    const firstPath = join(downloadRoot, "deep-research-report.md");
+    const latestPath = join(downloadRoot, "deep-research-report (1).md");
+    const partialPath = join(downloadRoot, "deep-research-report.md.crdownload");
+    const cutoffMs = Date.now();
+
+    await writeFile(oldPath, "old", "utf8");
+    await writeFile(firstPath, "first", "utf8");
+    await writeFile(latestPath, "latest", "utf8");
+    await writeFile(partialPath, "partial", "utf8");
+
+    await utimes(oldPath, new Date(cutoffMs - 5000), new Date(cutoffMs - 5000));
+    await utimes(firstPath, new Date(cutoffMs + 1000), new Date(cutoffMs + 1000));
+    await utimes(latestPath, new Date(cutoffMs + 2000), new Date(cutoffMs + 2000));
+
+    assert.equal(await findLatestMarkdownDownload(downloadRoot, cutoffMs), latestPath);
+    assert.equal(await findLatestMarkdownDownload(join(downloadRoot, "missing"), cutoffMs), null);
+  } finally {
+    await rm(downloadRoot, { recursive: true, force: true });
+  }
 });

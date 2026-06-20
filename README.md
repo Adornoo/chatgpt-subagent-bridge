@@ -24,6 +24,7 @@ Use it for:
 - naming and brainstorming packets,
 - summary or planning requests,
 - source-bound deep research brief planning,
+- attended ChatGPT Deep Research report launches where the operator reviews the proposed approach before confirmation,
 - review comments that do not require local execution.
 
 Do not use it for:
@@ -70,10 +71,14 @@ node /path/to/chatgpt-subagent-bridge/bin/chatgpt-bridge.mjs route \
 
 - `chatgpt-bridge prepare`: build and print a redacted task packet as Markdown.
 - `chatgpt-bridge route`: prepare, send, capture, validate, and store a run under `bridge_runs/` in the chosen workspace.
+- `chatgpt-bridge research-start`: prepare a packet, open a new ChatGPT chat, request Deep Research, submit the plan, and store ChatGPT's proposed research approach without confirming it.
+- `chatgpt-bridge research-complete`: optionally send feedback on the proposed approach, confirm the Deep Research run, poll until the final report is ready, and store the report plus validation verdict.
 - `chatgpt-bridge capture`: store a manually captured response against an existing packet and validate it.
 - `chatgpt-bridge validate`: validate a response against an existing packet without routing it through Chrome.
 
-`prepare` and `route` support `--mode advice-only`, `--mode github-only-code`, and `--mode deep-research-brief`. The deep research brief mode asks ChatGPT for a structured future-tense research plan with source strategy, evidence criteria, separate research/synthesis/implementation/review thread routing, and suggested 5.4 High, 5.4 Mini High, and 5.5 High model roles. It does not create threads, invoke models, inspect repositories, or perform research by itself.
+`prepare` and `route` support `--mode advice-only`, `--mode github-only-code`, `--mode deep-research-brief`, and `--mode deep-research-report`. The deep research brief mode asks ChatGPT for a structured future-tense research plan with source strategy, evidence criteria, separate research/synthesis/implementation/review thread routing, and suggested 5.4 High, 5.4 Mini High, and 5.5 High model roles. It does not create threads, invoke models, inspect repositories, or perform research by itself.
+
+`research-start` defaults to `deep-research-report` mode. This mode asks ChatGPT Deep Research to propose an approach first, then write a source-cited Markdown report after confirmation. The bridge stores the proposed approach in `research-approach.md` so the operator or Codex can review it before running `research-complete`. When ChatGPT renders the approach or report as an artifact that normal page text cannot expose, the Chrome adapter falls back to ChatGPT's `Export to Markdown` action and captures the downloaded Markdown file.
 
 By default, `route`, `capture`, and `validate` exit non-zero when validation fails. Use `--allow-failed-verdict` only when you deliberately want to inspect or preserve a failing output.
 
@@ -107,6 +112,20 @@ chatgpt-bridge prepare \
   --task "Plan a source-bound research brief for this market map."
 ```
 
+Example attended Deep Research report flow:
+
+```bash
+chatgpt-bridge research-start \
+  --title "Subscription usage research" \
+  --task-file ./research-plan.md \
+  --workspace-root .
+
+chatgpt-bridge research-complete \
+  --run-directory ./bridge_runs/... \
+  --approach-feedback-file ./approach-feedback.md \
+  --poll-ms 900000
+```
+
 All examples in this repository use fake paths and sample data only.
 
 ## Run Artifacts
@@ -120,11 +139,16 @@ Typical files:
 - `result-raw.md`
 - `result-packet.json`
 - `validation-verdict.json`
+- `research-approach.md` and `research-approach.json` for Deep Research start runs
+- `research-approach-revised.md` when `research-complete` sends feedback before confirmation
 - `route-error.json` when routing fails before capture completes
 
 ## Operational Limits
 
 - The Chrome adapter depends on Apple Events plus DOM selectors and polling. ChatGPT UI changes can break it.
+- Deep Research routing depends on ChatGPT's current Deep Research UI labels and may fail if the tool is unavailable, renamed, hidden behind account limits, or blocked by an interstitial.
+- `research-complete` defaults to checking every 15 minutes. It can still time out, mis-detect a running report, or require manual intervention if ChatGPT changes the report view or export menu.
+- Deep Research Markdown export is captured from the browser's Downloads folder. If Chrome is configured to ask where to save every file, or another download changes the newest Markdown file during capture, export capture can fail or need manual review.
 - Login prompts, CAPTCHAs, browser permission prompts, or the wrong ChatGPT account can block or invalidate a run.
 - Validation can catch obvious bad outputs, but it cannot prove a response is safe.
 - This package is designed for attended text handoff, not trustworthy automation.

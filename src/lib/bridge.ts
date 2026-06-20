@@ -35,11 +35,44 @@ export interface BridgeTransportAdapter {
   sendAndCapture(request: BridgeTransportRequest): Promise<BridgeTransportResponse>;
 }
 
+export interface DeepResearchApproachRequest extends BridgeTransportRequest {
+  feedback?: string;
+}
+
+export interface DeepResearchApproachResponse {
+  approachText: string;
+  captureMeta?: Partial<CaptureMeta>;
+}
+
+export interface DeepResearchReportRequest extends BridgeTransportRequest {
+  approachText: string;
+}
+
+export interface DeepResearchTransportAdapter {
+  submitResearchPlan(request: BridgeTransportRequest): Promise<DeepResearchApproachResponse>;
+  reviseResearchApproach?(request: DeepResearchApproachRequest): Promise<DeepResearchApproachResponse>;
+  requestResearchReport(request: DeepResearchReportRequest): Promise<BridgeTransportResponse>;
+}
+
 export interface RouteTaskOptions {
   workspaceRoot: string;
   packet: PreparedTaskPacket;
   adapter: BridgeTransportAdapter;
   confirmSensitive?: boolean;
+}
+
+export interface StartDeepResearchOptions {
+  workspaceRoot: string;
+  packet: PreparedTaskPacket;
+  adapter: DeepResearchTransportAdapter;
+  confirmSensitive?: boolean;
+}
+
+export interface CompleteDeepResearchOptions {
+  runDirectory: string;
+  packet: PreparedTaskPacket;
+  adapter: DeepResearchTransportAdapter;
+  approachFeedback?: string;
 }
 
 export interface CaptureStoredResultOptions {
@@ -59,6 +92,15 @@ export interface RouteTaskResult {
   verdict: ValidationVerdict;
 }
 
+export interface StartDeepResearchResult {
+  runDirectory: string;
+  taskPacketPath: string;
+  taskMarkdownPath: string;
+  approachPath: string;
+  approachText: string;
+  captureMeta: CaptureMeta;
+}
+
 export type PreparedTaskPacket = TaskPacket & {
   delivery: DeliveryPolicy;
 };
@@ -67,7 +109,7 @@ export type StoredResultPacket = ResultPacket & {
   capture: CaptureMeta;
 };
 
-export type WorkMode = "advice-only" | "github-only-code" | "deep-research-brief";
+export type WorkMode = "advice-only" | "github-only-code" | "deep-research-brief" | "deep-research-report";
 
 const SECRET_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{6,}\b/g,
@@ -217,6 +259,115 @@ export async function routeTaskThroughBridge(options: RouteTaskOptions): Promise
   };
 }
 
+export async function startDeepResearchThroughBridge(
+  options: StartDeepResearchOptions
+): Promise<StartDeepResearchResult> {
+  const { workspaceRoot, packet, adapter, confirmSensitive = false } = options;
+  enforceDeliveryPolicy(packet, confirmSensitive);
+
+  const runDirectory = await createRunDirectory(workspaceRoot, packet.prompt.title, packet.id);
+  const taskPacketPath = join(runDirectory, "task-packet.json");
+  const taskMarkdownPath = join(runDirectory, "task-packet.md");
+  const approachPath = join(runDirectory, "research-approach.md");
+
+  await writeJson(taskPacketPath, packet);
+  await writeFile(taskMarkdownPath, renderTaskPacketMarkdown(packet), "utf8");
+
+  let approach: DeepResearchApproachResponse;
+  try {
+    approach = await adapter.submitResearchPlan({
+      packet,
+      prompt: packet.prompt.body,
+      runDirectory
+    });
+  } catch (error) {
+    await writeJson(join(runDirectory, "route-error.json"), {
+      stage: "deep_research_start",
+      message: error instanceof Error ? error.message : String(error),
+      recordedAt: new Date().toISOString()
+    });
+    throw error;
+  }
+
+  const capturedAt = new Date().toISOString();
+  const captureMeta = normalizeCaptureMeta(approach.captureMeta, capturedAt);
+  await writeFile(approachPath, `${approach.approachText.trim()}\n`, "utf8");
+  await writeJson(join(runDirectory, "research-approach.json"), {
+    schemaVersion: "0.1",
+    kind: "deep-research-approach",
+    taskPacketId: packet.id,
+    approachText: approach.approachText.trim(),
+    captureMeta,
+    receivedAt: capturedAt
+  });
+
+  return {
+    runDirectory,
+    taskPacketPath,
+    taskMarkdownPath,
+    approachPath,
+    approachText: approach.approachText.trim(),
+    captureMeta
+  };
+}
+
+export async function completeDeepResearchThroughBridge(
+  options: CompleteDeepResearchOptions
+): Promise<Omit<RouteTaskResult, "taskPacketPath" | "taskMarkdownPath">> {
+  const { runDirectory, packet, adapter, approachFeedback } = options;
+  let approachText = await readOptionalText(join(runDirectory, "research-approach.md"));
+
+  try {
+    if (approachFeedback) {
+      if (!adapter.reviseResearchApproach) {
+        throw new Error("Deep Research adapter does not support approach feedback.");
+      }
+
+      const revised = await adapter.reviseResearchApproach({
+        packet,
+        prompt: packet.prompt.body,
+        runDirectory,
+        feedback: approachFeedback
+      });
+      approachText = revised.approachText.trim();
+      await writeFile(join(runDirectory, "research-approach-revised.md"), `${approachText}\n`, "utf8");
+    }
+
+    if (!approachText) {
+      throw new Error("No captured research approach found. Run research-start first.");
+    }
+
+    const capture = await adapter.requestResearchReport({
+      packet,
+      prompt: packet.prompt.body,
+      runDirectory,
+      approachText
+    });
+
+    const stored = await captureResultForPacket({
+      packet,
+      responseText: capture.responseText,
+      runDirectory,
+      captureMeta: capture.captureMeta
+    });
+
+    return {
+      runDirectory,
+      resultPacketPath: join(runDirectory, "result-packet.json"),
+      verdictPath: join(runDirectory, "validation-verdict.json"),
+      resultPacket: stored.resultPacket,
+      verdict: stored.verdict
+    };
+  } catch (error) {
+    await writeJson(join(runDirectory, "route-error.json"), {
+      stage: "deep_research_complete",
+      message: error instanceof Error ? error.message : String(error),
+      recordedAt: new Date().toISOString()
+    });
+    throw error;
+  }
+}
+
 export async function captureResultForPacket(
   options: CaptureStoredResultOptions
 ): Promise<{ resultPacket: StoredResultPacket; verdict: ValidationVerdict }> {
@@ -332,6 +483,18 @@ async function createRunDirectory(workspaceRoot: string, title: string, packetId
   return runDirectory;
 }
 
+async function readOptionalText(path: string): Promise<string> {
+  try {
+    return (await readFile(path, "utf8")).trim();
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return "";
+    }
+
+    throw error;
+  }
+}
+
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -399,11 +562,20 @@ function modeInstructions(workMode: WorkMode): string {
         "Route model work explicitly: use 5.4 High for primary synthesis, 5.4 Mini High for narrow extraction or checklist work, and 5.5 High for final challenge review.",
         "Do not imply that ChatGPT can create threads, inspect repositories, run tools, or dispatch those model routes directly."
       ].join(" ");
+    case "deep-research-report":
+      return [
+        "Deep Research report mode: use ChatGPT Deep Research when available.",
+        "First propose a research approach for operator review before writing the report.",
+        "After confirmation, produce a source-cited Markdown research report with findings, evidence, tradeoffs, and practical recommendations.",
+        "Do not imply that you can inspect local repositories, run shell commands, or access local files outside the packet."
+      ].join(" ");
   }
 }
 
 function defaultMaxResponseChars(workMode: WorkMode): number {
   switch (workMode) {
+    case "deep-research-report":
+      return 120000;
     case "deep-research-brief":
       return 20000;
     case "advice-only":

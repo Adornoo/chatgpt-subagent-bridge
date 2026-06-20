@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   captureResultForPacket,
+  completeDeepResearchThroughBridge,
   loadTaskPacket,
   prepareTaskPacket,
   renderTaskPacketMarkdown,
   routeTaskThroughBridge,
+  startDeepResearchThroughBridge,
   validateCapturedResult
 } from "./lib/bridge.ts";
 import type { WorkMode } from "./lib/bridge.ts";
-import { assertAllowedChatGptUrl, createChromeAppleScriptAdapter } from "./lib/chrome.ts";
+import { assertAllowedChatGptUrl, createChromeAppleScriptAdapter, createChromeDeepResearchAdapter } from "./lib/chrome.ts";
 
 type ParsedArgs = {
   positionals: string[];
@@ -28,6 +30,10 @@ async function main(): Promise<number> {
       return runPrepare(parsed);
     case "route":
       return runRoute(parsed);
+    case "research-start":
+      return runResearchStart(parsed);
+    case "research-complete":
+      return runResearchComplete(parsed);
     case "capture":
       return runCapture(parsed);
     case "validate":
@@ -78,6 +84,70 @@ async function runRoute(parsed: ParsedArgs): Promise<number> {
   return exitCodeForVerdict(result.verdict.status, parsed);
 }
 
+async function runResearchStart(parsed: ParsedArgs): Promise<number> {
+  const workspaceRoot = resolve(singleValue(parsed, "workspace-root") ?? process.cwd());
+  const packet = await buildPacketFromArgs(parsed, "deep-research-report");
+  const chatGptUrl = singleValue(parsed, "chatgpt-url") ?? "https://chatgpt.com/";
+  assertAllowedChatGptUrl(chatGptUrl, hasFlag(parsed, "allow-unsafe-chatgpt-url"));
+  const result = await startDeepResearchThroughBridge({
+    workspaceRoot,
+    packet,
+    adapter: createChromeDeepResearchAdapter({
+      chatGptUrl,
+      pollMs: parseNumber(singleValue(parsed, "poll-ms")) ?? 2000,
+      timeoutMs: parseNumber(singleValue(parsed, "timeout-ms")) ?? 300000
+    }),
+    confirmSensitive: hasFlag(parsed, "confirm-sensitive")
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        runDirectory: result.runDirectory,
+        approachPath: result.approachPath,
+        approachChars: result.approachText.length,
+        next: "Review research-approach.md, then run research-complete with optional --approach-feedback."
+      },
+      null,
+      2
+    )
+  );
+
+  return 0;
+}
+
+async function runResearchComplete(parsed: ParsedArgs): Promise<number> {
+  const runDirectory = resolve(requiredValue(parsed, "run-directory"));
+  const packet = await loadTaskPacket(join(runDirectory, "task-packet.json"));
+  const chatGptUrl = singleValue(parsed, "chatgpt-url") ?? "https://chatgpt.com/";
+  assertAllowedChatGptUrl(chatGptUrl, hasFlag(parsed, "allow-unsafe-chatgpt-url"));
+  const result = await completeDeepResearchThroughBridge({
+    runDirectory,
+    packet,
+    approachFeedback: await resolveOptionalText(parsed, "approach-feedback", "approach-feedback-file"),
+    adapter: createChromeDeepResearchAdapter({
+      chatGptUrl,
+      pollMs: parseNumber(singleValue(parsed, "poll-ms")) ?? 900000,
+      timeoutMs: parseNumber(singleValue(parsed, "timeout-ms")) ?? 28800000
+    })
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        runDirectory: result.runDirectory,
+        resultPacketPath: result.resultPacketPath,
+        verdict: result.verdict.status,
+        reasons: result.verdict.reasons
+      },
+      null,
+      2
+    )
+  );
+
+  return exitCodeForVerdict(result.verdict.status, parsed);
+}
+
 async function runCapture(parsed: ParsedArgs): Promise<number> {
   const packet = await loadTaskPacket(requiredValue(parsed, "packet"));
   const responseText = await resolveResponseText(parsed);
@@ -117,10 +187,10 @@ async function runValidate(parsed: ParsedArgs): Promise<number> {
   return exitCodeForVerdict(verdict.status, parsed);
 }
 
-async function buildPacketFromArgs(parsed: ParsedArgs) {
+async function buildPacketFromArgs(parsed: ParsedArgs, defaultWorkMode: WorkMode = "advice-only") {
   const task = await resolveTaskText(parsed);
   const attachments = await resolveAttachments(parsed);
-  const workMode = parseWorkMode(singleValue(parsed, "mode"));
+  const workMode = parseWorkMode(singleValue(parsed, "mode"), defaultWorkMode);
   return prepareTaskPacket({
     title: requiredValue(parsed, "title"),
     task,
@@ -128,6 +198,24 @@ async function buildPacketFromArgs(parsed: ParsedArgs) {
     workMode,
     maxResponseChars: parseNumber(singleValue(parsed, "max-response-chars"))
   });
+}
+
+async function resolveOptionalText(
+  parsed: ParsedArgs,
+  directKey: string,
+  fileKey: string
+): Promise<string | undefined> {
+  const direct = singleValue(parsed, directKey);
+  if (direct) {
+    return direct;
+  }
+
+  const file = singleValue(parsed, fileKey);
+  if (!file) {
+    return undefined;
+  }
+
+  return readFile(resolve(file), "utf8");
 }
 
 async function resolveTaskText(parsed: ParsedArgs): Promise<string> {
@@ -227,16 +315,23 @@ function parseNumber(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseWorkMode(value: string | undefined): WorkMode {
+function parseWorkMode(value: string | undefined, defaultWorkMode: WorkMode = "advice-only"): WorkMode {
   if (!value) {
-    return "advice-only";
+    return defaultWorkMode;
   }
 
-  if (value === "advice-only" || value === "github-only-code" || value === "deep-research-brief") {
+  if (
+    value === "advice-only" ||
+    value === "github-only-code" ||
+    value === "deep-research-brief" ||
+    value === "deep-research-report"
+  ) {
     return value;
   }
 
-  throw new Error(`Unknown mode: ${value}. Expected advice-only, github-only-code, or deep-research-brief.`);
+  throw new Error(
+    `Unknown mode: ${value}. Expected advice-only, github-only-code, deep-research-brief, or deep-research-report.`
+  );
 }
 
 function exitCodeForVerdict(status: "pass" | "fail", parsed: ParsedArgs): number {
@@ -261,13 +356,18 @@ MIT-licensed packet-only bridge for attended drafting, summarizing, planning, an
 Do not use this for secrets, regulated data, or anything you would not be willing to send to ChatGPT itself.
 
 Commands:
-  prepare --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief]
-  route --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief] [--workspace-root DIR] [--confirm-sensitive] [--allow-failed-verdict]
+  prepare --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief|deep-research-report]
+  route --title TITLE --task TEXT [--mode advice-only|github-only-code|deep-research-brief|deep-research-report] [--workspace-root DIR] [--confirm-sensitive] [--allow-failed-verdict]
+  research-start --title TITLE --task TEXT [--workspace-root DIR] [--confirm-sensitive]
+  research-complete --run-directory DIR [--approach-feedback TEXT|--approach-feedback-file FILE] [--poll-ms 900000] [--timeout-ms 28800000]
   capture --packet FILE --response TEXT|--response-file FILE [--run-directory DIR] [--allow-failed-verdict]
   validate --packet FILE --response TEXT|--response-file FILE [--allow-failed-verdict]
 
 Notes:
   route writes bridge_runs/ under the selected workspace root.
+  research-start opens a new ChatGPT chat, requests Deep Research, and stores ChatGPT's proposed research approach without confirming it.
+  research-complete can send approach feedback, confirms the research run, and polls until the final report is ready.
+  Deep Research artifact views are captured through ChatGPT's Export to Markdown action when direct page-text capture is unavailable.
   If --workspace-root is omitted, route defaults to the current working directory.
   Examples use fake paths and sample data only.
 
@@ -275,6 +375,8 @@ Examples:
   chatgpt-bridge prepare --title "Summarize notes" --task "Summarize these notes in three bullets."
   chatgpt-bridge prepare --title "Market map brief" --mode deep-research-brief --task "Plan a source-bound research brief."
   chatgpt-bridge route --title "Summarize notes" --task "Summarize these notes in three bullets." --workspace-root .
+  chatgpt-bridge research-start --title "Subscription usage research" --task-file ./research-plan.md --workspace-root .
+  chatgpt-bridge research-complete --run-directory ./bridge_runs/... --poll-ms 900000
   chatgpt-bridge capture --packet ./bridge_runs/.../task-packet.json --response-file ./reply.txt --run-directory ./bridge_runs/.../
   chatgpt-bridge validate --packet ./bridge_runs/.../task-packet.json --response-file ./reply.txt
   `);

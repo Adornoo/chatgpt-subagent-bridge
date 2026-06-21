@@ -43,6 +43,23 @@ test("help text explains route workspace-root behavior and shows it in examples"
   }
 });
 
+test("help text explains the two-stage Deep Research workflow", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "chatgpt-bridge-help-"));
+
+  try {
+    const result = await runNode([wrapperPath, "help"], cwd);
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr.trim(), "");
+    assert.match(result.stdout, /research-start --title TITLE --task TEXT/i);
+    assert.match(result.stdout, /research-complete --run-directory DIR/i);
+    assert.match(result.stdout, /stores ChatGPT's proposed research approach/i);
+    assert.match(result.stdout, /polls until the final report is ready/i);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function runNode(args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {

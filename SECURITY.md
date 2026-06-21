@@ -43,7 +43,9 @@ The live Chrome adapter requires `View > Developer > Allow JavaScript from Apple
 
 ### DOM fragility
 
-The Chrome route depends on selectors, button labels, and polling heuristics. ChatGPT UI changes, login pages, CAPTCHAs, or wrong-account states can break the route or capture the wrong thing.
+The Chrome route depends on selectors, button labels, and polling heuristics. ChatGPT UI changes, login pages, CAPTCHAs, wrong-account states, or Deep Research availability limits can break the route or capture the wrong thing.
+
+The Deep Research workflow is intentionally attended and two-stage. `research-start` stores ChatGPT's proposed research approach for review before confirmation. `research-complete` can send one feedback message, then confirms the run and polls for a final report. If ChatGPT renders the approach or report as an artifact that page text cannot expose, the adapter uses ChatGPT's Markdown export menu and reads the resulting file from the browser's Downloads folder. This is convenience automation for ChatGPT's UI, not a guarantee that the report is complete, correct, or safe to act on without review.
 
 ## Safe Use Guidance
 
